@@ -405,10 +405,20 @@ tr:hover td { background: #f8fafc; }
 // CONSTANTS
 // ──────────────────────────────────────────────────────────────────
 const INCOME_CATS = ['Salarios', 'ROI'];
-const SAVINGS_CATS = ['FONDO EMERGENCIA', 'Cuota aptos', 'Hipoteca'];
+
+// Traslados a fondos: se muestran en movimientos pero NO cuentan como gasto
+const FUND_MAP = {
+  'FONDO EMERGENCIA': 'emergencia',
+  'Cuota aptos':      'apto',
+  'Inversiones':      'inversiones',
+  'Fondo 2da propiedad': 'fondo2da',
+};
+const SAVINGS_CATS = Object.keys(FUND_MAP);
 
 const CAT_COLORS = {
   'Salarios': '#22c55e', 'ROI': '#16a34a',
+  'Inversiones': '#6366f1', 'Fondo 2da propiedad': '#f59e0b',
+  'FONDO EMERGENCIA': '#10b981', 'Cuota aptos': '#3b82f6',
   'Restaurantes y cafeterias': '#f97316', 'Delivery': '#fb923c',
   'Compras de supermercado': '#fbbf24', 'Ropa': '#e879f9',
   'Tarjetas': '#ef4444', 'Barberia': '#a78bfa', 'Tiquetes': '#38bdf8',
@@ -535,26 +545,50 @@ function getMonthIncome(m, y) {
   return getTxForMonth(m, y).filter(t => t.isIncome).reduce((s, t) => s + t.amount, 0);
 }
 
+// Gastos reales = excluye ingresos Y traslados a fondos
 function getMonthExpenses(m, y) {
-  return getTxForMonth(m, y).filter(t => !t.isIncome).reduce((s, t) => s + t.amount, 0);
+  return getTxForMonth(m, y)
+    .filter(t => !t.isIncome && !t.isSavings)
+    .reduce((s, t) => s + t.amount, 0);
 }
 
+// Solo categorías de gasto real (excluye fondos) para presupuesto y dona
 function getCatTotals(m, y) {
   const map = {};
-  getTxForMonth(m, y).filter(t => !t.isIncome).forEach(t => {
-    map[t.category] = (map[t.category] || 0) + t.amount;
-  });
+  getTxForMonth(m, y)
+    .filter(t => !t.isIncome && !t.isSavings)
+    .forEach(t => { map[t.category] = (map[t.category] || 0) + t.amount; });
   return map;
 }
 
+// Calcula saldo de cada fondo dinámicamente: saldo_inicial + aportes_registrados
+function getFundBalances() {
+  const b = cfg.balances || {};
+  const balances = {
+    emergencia: b.emergencia || 0,
+    apto:       b.apto       || 0,
+    inversiones: b.inversiones || 0,
+    fondo2da:   b.fondo2da   || 0,
+  };
+  txns.forEach(t => {
+    const fund = FUND_MAP[t.category];
+    if (fund) balances[fund] = (balances[fund] || 0) + t.amount;
+  });
+  return balances;
+}
+
 function getNetWorth() {
-  const b = cfg.balances;
-  const totalIncome = txns.filter(t => t.isIncome).reduce((s, t) => s + t.amount, 0);
-  const totalExpense = txns.filter(t => !t.isIncome).reduce((s, t) => s + t.amount, 0);
-  const liquid = (b.emergencia || 0) + (b.apto || 0) + (b.inversiones || 0) + (b.fondo2da || 0)
-               + totalIncome - totalExpense - (b.deuda || 0);
+  const b = cfg.balances || {};
+  const funds = getFundBalances();
+  const totalIncome  = txns.filter(t => t.isIncome).reduce((s, t) => s + t.amount, 0);
+  const totalExpense = txns.filter(t => !t.isIncome && !t.isSavings).reduce((s, t) => s + t.amount, 0);
+  // Efectivo libre = ingresos - gastos reales - traslados a fondos (ya contabilizados en funds)
+  const fundTransfers = txns.filter(t => t.isSavings).reduce((s, t) => s + t.amount, 0);
+  const cashFree = totalIncome - totalExpense - fundTransfers;
+  const liquid = funds.emergencia + funds.apto + funds.inversiones + funds.fondo2da
+               + cashFree - (b.deuda || 0);
   const total = liquid + (b.apartamento || 0);
-  return { liquid, total };
+  return { liquid, total, ...funds };
 }
 
 // ──────────────────────────────────────────────────────────────────
@@ -651,19 +685,20 @@ function renderDashboard() {
     ? `Líquido: ${COP(nw.liquid)} + Apto S.M.: ${COP(nw.apartamento)}`
     : `Patrimonio líquido: ${COP(nw.liquid)}`;
   document.getElementById('nwBreakdown').innerHTML = [
-    { l: 'Emergencia', v: cfg.balances.emergencia || 0, c: '#4ade80' },
-    { l: 'Inversiones', v: cfg.balances.inversiones || 0, c: '#60a5fa' },
-    { l: 'Fondo 2da prop', v: cfg.balances.fondo2da || 0, c: '#fbbf24' },
+    { l: 'Emergencia', v: nw.emergencia, c: '#4ade80' },
+    { l: 'Inversiones', v: nw.inversiones, c: '#818cf8' },
+    { l: 'Fondo 2da prop', v: nw.fondo2da, c: '#fbbf24' },
     { l: 'Deuda', v: -(cfg.balances.deuda || 0), c: '#f87171' },
   ].map(i => `<div class="nw-item"><div class="nw-item-label">${i.l}</div><div class="nw-item-value" style="color:${i.c}">${COP(i.v)}</div></div>`).join('');
 
   // Stats
   const incomeCount = getTxForMonth(currentMonth, currentYear).filter(t => t.isIncome).length;
-  const expenseCount = getTxForMonth(currentMonth, currentYear).filter(t => !t.isIncome).length;
+  const expenseCount = getTxForMonth(currentMonth, currentYear).filter(t => !t.isIncome && !t.isSavings).length;
+  const savingsCount = getTxForMonth(currentMonth, currentYear).filter(t => t.isSavings).length;
   document.getElementById('statIncome').textContent = COP(income);
   document.getElementById('statIncomeCount').textContent = `${incomeCount} transacciones`;
   document.getElementById('statExpense').textContent = COP(expense);
-  document.getElementById('statExpenseCount').textContent = `${expenseCount} transacciones`;
+  document.getElementById('statExpenseCount').textContent = `${expenseCount} gastos${savingsCount ? ` + ${savingsCount} traslados` : ''}`;
   const netEl = document.getElementById('statNet');
   netEl.textContent = COP(net);
   netEl.style.color = net >= 0 ? 'var(--success)' : 'var(--danger)';
@@ -676,13 +711,14 @@ function renderDashboard() {
   document.getElementById('monthLabel').textContent = `${MONTHS_ES[currentMonth]} ${currentYear}`;
   document.getElementById('monthLabel2').textContent = `${MONTHS_ES[currentMonth]} ${currentYear}`;
 
-  // Goals
-  const b = cfg.balances;
+  // Goals — saldos dinámicos desde transacciones
+  const deuda = (cfg.balances || {}).deuda || 0;
   const goals = [
-    { label: 'Fondo emergencia', current: b.emergencia || 0, target: 30000000, color: '#22c55e' },
-    { label: 'Portafolio inversiones', current: b.inversiones || 0, target: 200000000, color: '#3b82f6', note: 'Meta: $200M en 7 años' },
-    { label: 'Fondo 2da propiedad', current: b.fondo2da || 0, target: 25000000, color: '#f59e0b', note: 'Meta: $25M con hermano' },
-    { label: 'Tarjeta de crédito', current: b.deuda || 0, target: 0, color: '#ef4444', inverse: true, note: 'Meta: $0 ← pagar esta semana' },
+    { label: 'Fondo emergencia', current: nw.emergencia, target: 30000000, color: '#22c55e' },
+    { label: 'Portafolio inversiones', current: nw.inversiones, target: 200000000, color: '#6366f1', note: 'Meta 7 años: $200M' },
+    { label: 'Fondo 2da propiedad', current: nw.fondo2da, target: 25000000, color: '#f59e0b', note: 'Meta: $25M con hermano' },
+    { label: 'Fondo apto Santa Marta', current: nw.apto, target: 20000000, color: '#3b82f6', note: 'Para amoblar — entrega nov 2026' },
+    { label: 'Deuda tarjeta', current: deuda, target: 0, color: '#ef4444', inverse: true, note: 'Meta: $0' },
   ];
   document.getElementById('goalsContainer').innerHTML = goals.map(g => {
     const pct = g.inverse
