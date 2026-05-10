@@ -313,23 +313,51 @@ tr:hover td { background: #f8fafc; }
   <div class="section-title">Configuración</div>
 
   <div class="alert alert-info" style="margin-bottom:16px">
-    <strong>Cómo conectar tu Google Sheet:</strong><br>
-    1. Abre tu Google Sheet → <strong>Archivo → Compartir → Publicar en la web</strong><br>
-    2. Selecciona la hoja y elige <strong>"Valores separados por comas (.csv)"</strong><br>
-    3. Clic en "Publicar" → copia la URL generada<br>
-    4. Pégala abajo y haz clic en Guardar.<br><br>
-    <strong>Para GitHub Pages:</strong> Sube este archivo como <code>index.html</code> en un repositorio → Settings → Pages → Deploy from main branch.
+    <strong>🔒 Conexión privada con Google Apps Script (recomendado)</strong><br><br>
+    Tu sheet <strong>NO queda público</strong>. Solo el dashboard con tu token secreto puede leer los datos.<br><br>
+    <strong>Paso 1:</strong> En tu Google Sheet → <strong>Extensiones → Apps Script</strong><br>
+    <strong>Paso 2:</strong> Borra el código existente y pega este script:<br>
+    <pre id="scriptCode" style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:6px;padding:10px;font-size:11px;overflow-x:auto;margin:8px 0;white-space:pre-wrap">function doGet(e) {
+  var TOKEN = 'CAMBIA_ESTO_POR_TU_TOKEN_SECRETO';
+  if (e.parameter.token !== TOKEN) {
+    return ContentService.createTextOutput('Unauthorized');
+  }
+  var sheet = SpreadsheetApp.getActiveSpreadsheet().getActiveSheet();
+  var data = sheet.getDataRange().getValues();
+  var csv = data.map(function(row) {
+    return row.map(function(c) {
+      var s = String(c);
+      return s.indexOf(';') > -1 ? '"' + s + '"' : s;
+    }).join(';');
+  }).join('\n');
+  return ContentService.createTextOutput(csv)
+    .setMimeType(ContentService.MimeType.TEXT);
+}</pre>
+    <button class="btn btn-secondary" style="font-size:11px;padding:4px 10px;margin-bottom:8px" onclick="copyScript()">📋 Copiar script</button><br>
+    <strong>Paso 3:</strong> Cambia <code>CAMBIA_ESTO_POR_TU_TOKEN_SECRETO</code> por cualquier texto que solo tú conozcas (ej: <code>mitoken2026</code>)<br>
+    <strong>Paso 4:</strong> Clic en <strong>Implementar → Nueva implementación</strong> → Tipo: <em>Aplicación web</em> → Ejecutar como: <em>Yo</em> → Acceso: <em>Cualquier usuario</em> → Implementar<br>
+    <strong>Paso 5:</strong> Copia la URL que te dan (<code>https://script.google.com/macros/s/.../exec</code>)<br>
+    <strong>Paso 6:</strong> Pégala abajo junto con tu token y guarda.<br><br>
+    <span style="color:#0369a1">💡 El sheet permanece completamente privado. Solo quien tenga tu URL + token puede leer los datos.</span>
   </div>
 
   <div class="grid-2">
     <div class="card">
-      <div class="card-title" style="margin-bottom:14px">Google Sheet</div>
+      <div class="card-title" style="margin-bottom:14px">Conexión Google Sheet</div>
       <div class="form-group">
-        <label class="form-label">URL del sheet publicado (CSV)</label>
-        <input class="form-input" id="cfgSheetUrl" placeholder="https://docs.google.com/spreadsheets/d/e/...">
-        <div class="form-hint">File > Share > Publish to web > CSV. La URL termina en ?output=csv</div>
+        <label class="form-label">URL del Apps Script (exec URL)</label>
+        <input class="form-input" id="cfgSheetUrl" placeholder="https://script.google.com/macros/s/.../exec">
+        <div class="form-hint">La URL termina en <code>/exec</code> — la obtienes en "Implementar → Gestionar implementaciones"</div>
       </div>
-      <button class="btn btn-primary" onclick="testAndSave()">Guardar y probar conexión</button>
+      <div class="form-group">
+        <label class="form-label">Tu token secreto</label>
+        <input class="form-input" id="cfgToken" type="password" placeholder="mitoken2026">
+        <div class="form-hint">El mismo texto que pusiste en el script. Se guarda solo en este dispositivo.</div>
+      </div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap">
+        <button class="btn btn-primary" onclick="testAndSave()">Guardar y probar conexión</button>
+        <button class="btn btn-secondary" onclick="copyGithubInstructions()">📋 Instrucciones GitHub Pages</button>
+      </div>
       <div id="testResult" style="margin-top:10px;font-size:13px"></div>
     </div>
 
@@ -415,6 +443,7 @@ let currentYear = new Date().getFullYear();
 
 let cfg = {
   sheetUrl: '',
+  token: '',
   balances: { emergencia: 17700000, apto: 13400000, inversiones: 0, fondo2da: 0, deuda: 2000000, apartamento: 0 },
   budgets: { ...DEFAULT_BUDGETS },
 };
@@ -914,6 +943,7 @@ function toggleCheck(key) {
 // ──────────────────────────────────────────────────────────────────
 function renderConfig() {
   document.getElementById('cfgSheetUrl').value = cfg.sheetUrl || '';
+  document.getElementById('cfgToken').value = cfg.token || '';
   const b = cfg.balances || {};
   document.getElementById('cfgEmergencia').value = b.emergencia || 17700000;
   document.getElementById('cfgApto').value = b.apto || 13400000;
@@ -933,6 +963,7 @@ function renderConfig() {
 
 function saveConfig() {
   cfg.sheetUrl = document.getElementById('cfgSheetUrl').value.trim();
+  cfg.token = document.getElementById('cfgToken').value.trim();
   cfg.balances = {
     emergencia: Number(document.getElementById('cfgEmergencia').value) || 0,
     apto: Number(document.getElementById('cfgApto').value) || 0,
@@ -956,36 +987,38 @@ function saveConfig() {
 
 async function testAndSave() {
   const url = document.getElementById('cfgSheetUrl').value.trim();
+  const token = document.getElementById('cfgToken').value.trim();
   const res = document.getElementById('testResult');
-  if (!url) { res.textContent = '⚠️ Ingresa una URL primero.'; return; }
-  res.textContent = '⏳ Probando conexión...';
+  if (!url) { res.textContent = '⚠️ Ingresa la URL del script primero.'; return; }
+  res.textContent = '⏳ Probando conexión segura...';
   try {
-    const data = await fetchCsv(url);
+    const data = await fetchCsv(url, token);
     if (data.length > 0) {
       cfg.sheetUrl = url;
+      cfg.token = token;
       saveCfg();
-      res.innerHTML = `<span style="color:var(--success)">✓ Conexión exitosa — ${data.length} filas cargadas.</span>`;
+      res.innerHTML = `<span style="color:var(--success)">✓ Conexión privada exitosa — ${data.length} filas cargadas. Tu sheet permanece privado.</span>`;
       txns = parseRows(data);
       saveTxns();
       updateAll();
-    } else { res.innerHTML = `<span style="color:var(--warning)">⚠️ Conectado pero sin datos. Revisa que la hoja tenga filas.</span>`; }
+    } else { res.innerHTML = `<span style="color:var(--warning)">⚠️ Conectado pero sin datos. Verifica que la hoja tenga filas.</span>`; }
   } catch(e) {
-    res.innerHTML = `<span style="color:var(--danger)">✗ Error: ${e.message}. Asegúrate de usar la URL de "Publicar en la web" (no la URL normal del sheet).</span>`;
+    res.innerHTML = `<span style="color:var(--danger)">✗ Error: ${e.message}. Revisa que el script esté implementado y el token coincida.</span>`;
   }
 }
 
 // ──────────────────────────────────────────────────────────────────
 // SHEET SYNC
 // ──────────────────────────────────────────────────────────────────
-async function fetchCsv(url) {
-  const response = await fetch(url);
+async function fetchCsv(url, token) {
+  const fullUrl = token ? `${url}?token=${encodeURIComponent(token)}` : url;
+  const response = await fetch(fullUrl);
   if (!response.ok) throw new Error(`HTTP ${response.status}`);
   const text = await response.text();
+  if (text.trim() === 'Unauthorized') throw new Error('Token incorrecto — verifica que coincida con el del script');
   return new Promise((resolve, reject) => {
     Papa.parse(text, {
-      header: true,
-      delimiter: ';',
-      skipEmptyLines: true,
+      header: true, delimiter: ';', skipEmptyLines: true,
       complete: (r) => resolve(r.data),
       error: (e) => reject(e),
     });
@@ -997,11 +1030,11 @@ async function syncSheet() {
   const btn = document.querySelector('.sync-btn');
   btn.textContent = '⏳ Sincronizando...';
   try {
-    const data = await fetchCsv(cfg.sheetUrl);
+    const data = await fetchCsv(cfg.sheetUrl, cfg.token);
     txns = parseRows(data);
     saveTxns();
-    const now = new Date().toLocaleTimeString('es-CO', { hour: '2-digit', minute: '2-digit' });
-    document.getElementById('lastSync').textContent = `Sync: ${now}`;
+    localStorage.setItem('fin_lastSync', Date.now());
+    updateLastSyncLabel();
     updateAll();
     btn.textContent = '✓ Sincronizado';
     setTimeout(() => btn.textContent = '↻ Sincronizar', 2000);
@@ -1055,27 +1088,16 @@ document.addEventListener('DOMContentLoaded', () => {
   // Auto-sync si hay URL configurada
   if (cfg.sheetUrl) {
     syncSheet();
-    // Cada 5 minutos en segundo plano
     setInterval(syncSheet, 5 * 60 * 1000);
   }
-
-  // Sync cuando el usuario vuelve a la pestaña
   document.addEventListener('visibilitychange', () => {
     if (!document.hidden && cfg.sheetUrl) {
       const last = localStorage.getItem('fin_lastSync');
       const minsSince = last ? (Date.now() - Number(last)) / 60000 : 999;
-      if (minsSince > 2) syncSheet(); // solo si pasaron más de 2 min
+      if (minsSince > 2) syncSheet();
     }
   });
 });
-
-// Guardar timestamp del último sync exitoso
-const _origSync = syncSheet;
-async function syncSheet() {
-  await _origSync();
-  localStorage.setItem('fin_lastSync', Date.now());
-  updateLastSyncLabel();
-}
 
 function updateLastSyncLabel() {
   const last = localStorage.getItem('fin_lastSync');
@@ -1087,6 +1109,22 @@ function updateLastSyncLabel() {
 
 // Actualizar el label "hace X min" cada minuto
 setInterval(updateLastSyncLabel, 60000);
+
+function copyScript() {
+  const code = document.getElementById('scriptCode').textContent;
+  navigator.clipboard.writeText(code).then(() => alert('Script copiado ✓')).catch(() => alert('Selecciona el código manualmente'));
+}
+
+function copyGithubInstructions() {
+  const txt = `Cómo publicar en GitHub Pages:
+1. Ve a github.com → New repository → Nombre: "dashboard-financiero" → Create
+2. Sube el archivo dashboard.html como "index.html" (botón "uploading an existing file")
+3. Settings → Pages → Branch: main → Folder: / (root) → Save
+4. En ~1 minuto disponible en: https://TU_USUARIO.github.io/dashboard-financiero
+5. La configuración (URL, token, saldos) se guarda solo en tu dispositivo (localStorage).`;
+  navigator.clipboard.writeText(txt).then(() => alert('Instrucciones copiadas ✓')).catch(() => alert(txt));
+}
+
 </script>
 </body>
 </html>
