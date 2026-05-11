@@ -479,7 +479,14 @@ function loadState() {
     const savedCl = localStorage.getItem('fin_checklist');
     if (savedCl) checklist = JSON.parse(savedCl);
     const savedTx = localStorage.getItem('fin_txns');
-    if (savedTx) txns = JSON.parse(savedTx);
+    if (savedTx) {
+      // Re-parsear la fecha desde dateStr (el string original del sheet) para evitar
+      // el shift de timezone que ocurre cuando JSON serializa un Date a ISO string UTC
+      txns = JSON.parse(savedTx).map(t => ({
+        ...t,
+        date: t.dateStr ? parseDate(t.dateStr) : (t.date ? parseDate(t.date) : null),
+      }));
+    }
   } catch(e) { console.warn('Load state failed', e); }
 }
 
@@ -509,6 +516,13 @@ function parseDate(str) {
   const s = String(str).trim();
   if (!s || s === 'undefined' || s === 'null') return null;
 
+  // ISO con timezone: "2026-04-24T05:00:00.000Z" o "2026-04-24T00:00:00Z"
+  // Extraer solo Y/M/D antes de parsear para evitar el shift UTC→local (resta 5h en Colombia)
+  const isoMatch = s.match(/^(\d{4})-(\d{2})-(\d{2})T/);
+  if (isoMatch) {
+    return new Date(Number(isoMatch[1]), Number(isoMatch[2]) - 1, Number(isoMatch[3]));
+  }
+
   // M/D/YYYY o MM/DD/YYYY con o sin hora: "4/24/2026" o "4/24/2026 9:30:00"
   const slashDate = s.split(/\s+/)[0];
   const slash = slashDate.split('/');
@@ -517,7 +531,7 @@ function parseDate(str) {
     if (y > 1000 && m >= 1 && m <= 12 && d >= 1 && d <= 31) return new Date(y, m - 1, d);
   }
 
-  // YYYY-MM-DD
+  // YYYY-MM-DD (sin hora, sin timezone)
   const dash = s.split(/\s+/)[0].split('-');
   if (dash.length === 3 && parseInt(dash[0], 10) > 1000) {
     const [y, m, d] = dash.map(Number);
