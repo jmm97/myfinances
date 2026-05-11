@@ -227,13 +227,19 @@ tr:hover td { background: #f8fafc; }
     <div id="goalsContainer"></div>
   </div>
 
-  <div class="card">
-    <div class="card-title" style="margin-bottom:12px">Últimas transacciones</div>
-    <div class="table-wrap">
-      <table id="recentTable">
-        <thead><tr><th>Fecha</th><th>Item</th><th>Categoría</th><th>Pago con</th><th style="text-align:right">Cantidad</th></tr></thead>
-        <tbody id="recentBody"><tr><td colspan="5" style="text-align:center;color:var(--dim);padding:24px">Sin datos. Configura tu Google Sheet.</td></tr></tbody>
-      </table>
+  <div class="grid-2">
+    <div class="card">
+      <div class="card-title" style="margin-bottom:12px">Top 10 gastos del mes</div>
+      <div id="top10Body"></div>
+    </div>
+    <div class="card">
+      <div class="card-title" style="margin-bottom:12px">Últimas transacciones</div>
+      <div class="table-wrap">
+        <table id="recentTable">
+          <thead><tr><th>Fecha</th><th>Item</th><th>Categoría</th><th style="text-align:right">Cantidad</th></tr></thead>
+          <tbody id="recentBody"><tr><td colspan="4" style="text-align:center;color:var(--dim);padding:24px">Sin datos. Configura tu Google Sheet.</td></tr></tbody>
+        </table>
+      </div>
     </div>
   </div>
 </section>
@@ -496,16 +502,21 @@ function parseAmount(str) {
 
 function parseDate(str) {
   if (!str) return null;
-  // Try ISO first
-  let d = new Date(str);
-  if (!isNaN(d)) return d;
-  // DD/MM/YYYY
-  const parts = str.split('/');
+  const s = String(str).trim();
+
+  // Google Sheets Timestamp: "M/D/YYYY H:MM:SS" → mes/dia/año
+  // Fecha manual del form: "M/D/YYYY" → mes/dia/año
+  const parts = s.split(/[\s,]+/)[0].split('/');
   if (parts.length === 3) {
     const [a, b, c] = parts.map(Number);
-    if (c > 1000) return new Date(c, b - 1, a);
-    if (a > 1000) return new Date(a, b - 1, c);
+    if (c > 1000) return new Date(c, a - 1, b); // MM/DD/YYYY ← formato del form
+    if (a > 1000) return new Date(a, b - 1, c); // YYYY/MM/DD
   }
+
+  // ISO fallback: "YYYY-MM-DD"
+  const iso = new Date(s);
+  if (!isNaN(iso)) return iso;
+
   return null;
 }
 
@@ -733,17 +744,39 @@ function renderDashboard() {
     </div>`;
   }).join('');
 
-  // Recent transactions
-  const recent = txns.slice(0, 8);
+  // Top 10 gastos del mes (excluye fondos e ingresos)
+  const monthTx = getTxForMonth(currentMonth, currentYear);
+  const top10 = monthTx
+    .filter(t => !t.isIncome && !t.isSavings)
+    .sort((a, b) => b.amount - a.amount)
+    .slice(0, 10);
+  const maxTop = top10.length ? top10[0].amount : 1;
+  document.getElementById('top10Body').innerHTML = top10.length
+    ? top10.map((t, i) => `
+      <div style="display:flex;align-items:center;gap:8px;padding:6px 0;border-bottom:0.5px solid var(--border)">
+        <span style="font-size:11px;font-weight:500;color:var(--muted);min-width:16px;text-align:right">${i + 1}</span>
+        <span class="cat-dot" style="background:${CAT_COLORS[t.category] || '#94a3b8'}"></span>
+        <div style="flex:1;min-width:0">
+          <div style="font-size:13px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${t.item}</div>
+          <div style="font-size:11px;color:var(--dim)">${t.category} · ${t.date ? t.date.toLocaleDateString('es-CO') : t.dateStr}</div>
+          <div style="height:3px;background:var(--border);border-radius:2px;margin-top:4px;overflow:hidden">
+            <div style="height:100%;width:${Math.round((t.amount/maxTop)*100)}%;background:${CAT_COLORS[t.category]||'#94a3b8'};border-radius:2px"></div>
+          </div>
+        </div>
+        <span style="font-size:13px;font-weight:500;color:var(--danger);font-variant-numeric:tabular-nums;flex-shrink:0">${COP(t.amount)}</span>
+      </div>`).join('')
+    : '<div style="text-align:center;color:var(--dim);padding:24px;font-size:13px">Sin gastos registrados este mes</div>';
+
+  // Últimas transacciones (todas, incluye fondos e ingresos)
+  const recent = txns.slice(0, 10);
   document.getElementById('recentBody').innerHTML = recent.length
     ? recent.map(t => `<tr>
-        <td>${t.date ? t.date.toLocaleDateString('es-CO') : t.dateStr}</td>
-        <td>${t.item}</td>
+        <td style="white-space:nowrap">${t.date ? t.date.toLocaleDateString('es-CO') : t.dateStr}</td>
+        <td style="max-width:140px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${t.item}</td>
         <td><span class="cat-dot" style="background:${CAT_COLORS[t.category] || '#94a3b8'}"></span>${t.category}</td>
-        <td>${t.payMethod}</td>
-        <td style="text-align:right" class="${t.isIncome ? 'amount-positive' : 'amount-negative'}">${t.isIncome ? '+' : '-'}${COP(t.amount)}</td>
+        <td style="text-align:right" class="${t.isIncome ? 'amount-positive' : t.isSavings ? 'amount-neutral' : 'amount-negative'}">${t.isIncome ? '+' : t.isSavings ? '→' : '-'}${COP(t.amount)}</td>
       </tr>`).join('')
-    : '<tr><td colspan="5" style="text-align:center;color:var(--dim);padding:24px">Sin datos. Configura tu Google Sheet en ⚙️ Configuración.</td></tr>';
+    : '<tr><td colspan="4" style="text-align:center;color:var(--dim);padding:24px">Sin datos. Configura tu Google Sheet en ⚙️.</td></tr>';
 
   buildCashflowChart();
   buildCatChart();
