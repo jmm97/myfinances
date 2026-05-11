@@ -331,9 +331,13 @@ tr:hover td { background: #f8fafc; }
   var sheet = SpreadsheetApp.getActiveSpreadsheet().getActiveSheet();
   var data = sheet.getDataRange().getValues();
   var csv = data.map(function(row) {
-    return row.map(function(c) {
-      var s = String(c);
-      return s.indexOf(';') > -1 ? '"' + s + '"' : s;
+    return row.map(function(cell) {
+      // Fechas: Apps Script devuelve objetos Date → formatear como M/D/YYYY
+      if (cell instanceof Date) {
+        return (cell.getMonth()+1) + '/' + cell.getDate() + '/' + cell.getFullYear();
+      }
+      var s = String(cell);
+      return s.indexOf(';') > -1 ? '"' + s.replace(/"/g, '""') + '"' : s;
     }).join(';');
   }).join('\n');
   return ContentService.createTextOutput(csv)
@@ -503,19 +507,28 @@ function parseAmount(str) {
 function parseDate(str) {
   if (!str) return null;
   const s = String(str).trim();
+  if (!s || s === 'undefined' || s === 'null') return null;
 
-  // Google Sheets Timestamp: "M/D/YYYY H:MM:SS" → mes/dia/año
-  // Fecha manual del form: "M/D/YYYY" → mes/dia/año
-  const parts = s.split(/[\s,]+/)[0].split('/');
-  if (parts.length === 3) {
-    const [a, b, c] = parts.map(Number);
-    if (c > 1000) return new Date(c, a - 1, b); // MM/DD/YYYY ← formato del form
-    if (a > 1000) return new Date(a, b - 1, c); // YYYY/MM/DD
+  // M/D/YYYY o MM/DD/YYYY con o sin hora: "4/24/2026" o "4/24/2026 9:30:00"
+  const slashDate = s.split(/\s+/)[0];
+  const slash = slashDate.split('/');
+  if (slash.length === 3) {
+    const m = parseInt(slash[0], 10), d = parseInt(slash[1], 10), y = parseInt(slash[2], 10);
+    if (y > 1000 && m >= 1 && m <= 12 && d >= 1 && d <= 31) return new Date(y, m - 1, d);
   }
 
-  // ISO fallback: "YYYY-MM-DD"
-  const iso = new Date(s);
-  if (!isNaN(iso)) return iso;
+  // YYYY-MM-DD
+  const dash = s.split(/\s+/)[0].split('-');
+  if (dash.length === 3 && parseInt(dash[0], 10) > 1000) {
+    const [y, m, d] = dash.map(Number);
+    if (m >= 1 && m <= 12 && d >= 1 && d <= 31) return new Date(y, m - 1, d);
+  }
+
+  // "Wed Apr 01 2026 00:00:00 GMT+0000 (...)" — Date.toString() del script viejo
+  // Extraemos día/mes/año del string SIN usar new Date() para evitar el shift de timezone
+  const MO = {Jan:0,Feb:1,Mar:2,Apr:3,May:4,Jun:5,Jul:6,Aug:7,Sep:8,Oct:9,Nov:10,Dec:11};
+  const m = s.match(/\w+\s+(\w+)\s+(\d{1,2})\s+(\d{4})/);
+  if (m && MO[m[1]] !== undefined) return new Date(Number(m[3]), MO[m[1]], Number(m[2]));
 
   return null;
 }
