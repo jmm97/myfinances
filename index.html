@@ -5,8 +5,39 @@
 <title>Dashboard Financiero</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
-<script src="https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.4.1/papaparse.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.0/chart.umd.min.js"></script>
+<script>
+// Minimal CSV parser — reemplaza PapaParse, sin dependencias externas
+var PapaParse = {
+  parse(text, opts) {
+    const sep = opts.delimiter || ',';
+    try {
+      function splitLine(line) {
+        const out = []; let cur = '', inQ = false;
+        for (let i = 0; i < line.length; i++) {
+          const c = line[i];
+          if (c === '"') { inQ = !inQ; }
+          else if (c === sep && !inQ) { out.push(cur); cur = ''; }
+          else cur += c;
+        }
+        out.push(cur);
+        return out;
+      }
+      const lines = text.split('\n').map(l => l.replace(/\r$/, ''));
+      const filtered = opts.skipEmptyLines ? lines.filter(l => l.trim()) : lines;
+      if (!filtered.length) { if (opts.complete) opts.complete({ data: [] }); return; }
+      const headers = splitLine(filtered[0]).map(h => h.trim());
+      const data = filtered.slice(1).map(line => {
+        const vals = splitLine(line);
+        const obj = {};
+        headers.forEach((h, i) => { obj[h] = (vals[i] || '').trim(); });
+        return obj;
+      });
+      if (opts.complete) opts.complete({ data });
+    } catch(e) { if (opts.error) opts.error(e); else console.error(e); }
+  }
+};
+</script>
 <style>
 :root{
   --bg:#09090b;--surface:#111113;--card:#18181b;--card2:#1c1c20;
