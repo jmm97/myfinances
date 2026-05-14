@@ -1110,37 +1110,88 @@ async function fetchSheet(url,tok){
 }
 
 async function syncSheet(){
-  const tok=document.getElementById('cfgToken')?.value?.trim()||token;
-  if(!tok){switchTab('cfg');return}
-  const btn=document.querySelector('.sync-btn');
-  btn.textContent='⏳';
-  try{
-    const data=await fetchSheet(SCRIPT_URL,tok);
-    token=tok; saveToken();
-    txns=parseRows(data); saveTxns();
-    localStorage.setItem('fin_lastSync',Date.now());
+  const tok = (document.getElementById('cfgToken')?.value?.trim()) || token;
+  if(!tok){
+    setStatus('⚠️ Sin token — ve a Config','var(--yellow)');
+    switchTab('cfg');
+    return;
+  }
+  const btn = document.querySelector('.sync-btn');
+  btn.textContent = '⏳'; btn.disabled = true;
+  setStatus('Sincronizando...','var(--dim)');
+  try {
+    const data = await fetchSheet(SCRIPT_URL, tok);
+    token = tok; saveToken();
+    txns = parseRows(data); saveTxns();
+    localStorage.setItem('fin_lastSync', Date.now());
     updateAll();
-    btn.textContent='✓'; setTimeout(()=>btn.textContent='↻ Sync',1500);
-    document.getElementById('hSync').textContent='hace menos de 1 min';
-  }catch(e){
-    btn.textContent='✗'; console.error(e);
-    setTimeout(()=>btn.textContent='↻ Sync',2000);
+    const n = txns.length;
+    setStatus(`✓ ${n} registros`, 'var(--green)');
+    btn.textContent = '↻ Sync';
+    updateLastSync();
+  } catch(e) {
+    const msg = e.message || String(e);
+    setStatus(`✗ ${msg}`, 'var(--red)');
+    btn.textContent = '↻ Sync';
+    console.error('[Sync error]', e);
+    // Show error prominently so user can act
+    document.getElementById('hSync').textContent = '✗ Error — ver Config';
+    document.getElementById('hSync').style.color = 'var(--red)';
+  } finally {
+    btn.disabled = false;
   }
 }
 
+function setStatus(msg, color) {
+  const el = document.getElementById('hSync');
+  el.textContent = msg;
+  el.style.color = color || 'var(--dim)';
+}
+
 async function testConn(){
-  const tok=document.getElementById('cfgToken').value.trim();
-  const el=document.getElementById('cfgResult');
-  if(!tok){el.innerHTML='<span style="color:var(--red)">Ingresa el token primero.</span>';return}
-  el.innerHTML='⏳ Probando...';
-  try{
-    const data=await fetchSheet(SCRIPT_URL,tok);
-    token=tok; saveToken();
-    txns=parseRows(data); saveTxns();
+  const tok = document.getElementById('cfgToken').value.trim();
+  const el  = document.getElementById('cfgResult');
+  if(!tok){ el.innerHTML='<span style="color:var(--red)">Ingresa el token primero.</span>'; return; }
+  el.innerHTML = '⏳ Probando conexión…';
+  try {
+    // Step 1: raw fetch to see what comes back
+    el.innerHTML = '⏳ Haciendo fetch…';
+    const url = `${SCRIPT_URL}?token=${encodeURIComponent(tok)}`;
+    let res;
+    try { res = await fetch(url); }
+    catch(fetchErr) {
+      el.innerHTML = `<span style="color:var(--red)">✗ Error de red: ${fetchErr.message}<br>
+        Puede ser CORS. Asegúrate de que el script esté desplegado como "Aplicación web" y con acceso "Cualquier usuario".</span>`;
+      return;
+    }
+    el.innerHTML = `⏳ Respuesta HTTP ${res.status}…`;
+    const txt = await res.text();
+    const preview = txt.slice(0, 200);
+    if(!res.ok) {
+      el.innerHTML = `<span style="color:var(--red)">✗ HTTP ${res.status}<br><code>${preview}</code></span>`;
+      return;
+    }
+    if(txt.trim() === 'Unauthorized') {
+      el.innerHTML = `<span style="color:var(--red)">✗ Token incorrecto — el script respondió "Unauthorized".<br>
+        Verifica que el token en el dashboard coincida exactamente con el TOKEN en el Apps Script.</span>`;
+      return;
+    }
+    // Step 2: parse
+    el.innerHTML = '⏳ Parseando CSV…';
+    const data = await new Promise((res2,rej) => PapaParse.parse(txt,{header:true,delimiter:';',skipEmptyLines:true,complete:r=>res2(r.data),error:rej}));
+    if(!data.length) {
+      el.innerHTML = '<span style="color:var(--yellow)">⚠️ Conexión OK pero sin filas. Verifica que la hoja tenga datos.</span>';
+      return;
+    }
+    token = tok; saveToken();
+    txns = parseRows(data); saveTxns();
+    localStorage.setItem('fin_lastSync', Date.now());
     updateAll();
-    el.innerHTML=`<span style="color:var(--green)">✓ Conexión exitosa — ${data.length} filas cargadas. Tu sheet permanece privado.</span>`;
-  }catch(e){
-    el.innerHTML=`<span style="color:var(--red)">✗ Error: ${e.message}</span>`;
+    el.innerHTML = `<span style="color:var(--green)">✓ Conexión exitosa — ${data.length} filas cargadas, ${txns.length} transacciones parseadas.</span>`;
+    setStatus(`✓ ${txns.length} registros`, 'var(--green)');
+  } catch(e) {
+    el.innerHTML = `<span style="color:var(--red)">✗ Error: ${e.message}</span>`;
+    console.error('[testConn]', e);
   }
 }
 
